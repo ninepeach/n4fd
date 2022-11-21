@@ -1,4 +1,4 @@
-module ninepeach/n4fd
+module github.com/ninepeach/n4fd
 
 go 1.19
 
