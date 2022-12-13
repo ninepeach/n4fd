@@ -6,39 +6,10 @@ import (
     "sync"
     "testing"
 
-    "bytes"
-    "crypto/rand"
-
     "github.com/ninepeach/n4fd/config"
     "github.com/ninepeach/n4fd/common"
+    "github.com/ninepeach/n4fd/test/util"
 )
-
-func CheckConn(a net.Conn, b net.Conn) bool {
-    payload1 := [1024]byte{}
-    payload2 := [1024]byte{}
-    rand.Reader.Read(payload1[:])
-    rand.Reader.Read(payload2[:])
-
-    result1 := [1024]byte{}
-    result2 := [1024]byte{}
-    wg := sync.WaitGroup{}
-    wg.Add(2)
-    go func() {
-        a.Write(payload1[:])
-        a.Read(result2[:])
-        wg.Done()
-    }()
-    go func() {
-        b.Read(result1[:])
-        b.Write(payload2[:])
-        wg.Done()
-    }()
-    wg.Wait()
-    if !bytes.Equal(payload1[:], result1[:]) || !bytes.Equal(payload2[:], result2[:]) {
-        return false
-    }
-    return true
-}
 
 func TestTransport(t *testing.T) {
     serverCfg := &Config{
@@ -78,7 +49,7 @@ func TestTransport(t *testing.T) {
     buf := [10]byte{}
     conn2.Read(buf[:])
 
-    if !CheckConn(conn1, conn2) {
+    if !util.CheckConn(conn1, conn2) {
         t.Fail()
     }
     s.Close()
