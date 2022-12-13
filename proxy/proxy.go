@@ -5,11 +5,11 @@ import (
     "io"
     "math/rand"
     "net"
-    "os"
     "strings"
 
-    "github.com/ninepeach/go-clog"
+    clog "github.com/ninepeach/go-clog"
     "github.com/ninepeach/n4fd/common"
+    "github.com/ninepeach/n4fd/config"
     "github.com/ninepeach/n4fd/tunnel"
 )
 
@@ -51,18 +51,18 @@ func (p *Proxy) relayConnLoop() {
                 if err != nil {
                     select {
                     case <-p.ctx.Done():
-                        log.Debug("exiting")
+                        clog.Debug("exiting")
                         return
                     default:
                     }
-                    log.Error(common.NewError("failed to accept connection").Base(err))
+                    clog.Error(common.NewError("failed to accept connection").Base(err).Error())
                     continue
                 }
                 go func(inbound tunnel.Conn) {
                     defer inbound.Close()
                     outbound, err := p.sink.DialConn(inbound.Metadata().Address, nil)
                     if err != nil {
-                        log.Error(common.NewError("proxy failed to dial connection").Base(err))
+                        clog.Error(common.NewError("proxy failed to dial connection").Base(err).Error())
                         return
                     }
                     defer outbound.Close()
@@ -76,13 +76,13 @@ func (p *Proxy) relayConnLoop() {
                     select {
                     case err = <-errChan:
                         if err != nil {
-                            log.Error(err)
+                            clog.Error(err.Error())
                         }
                     case <-p.ctx.Done():
-                        log.Debug("shutting down conn relay")
+                        clog.Debug("shutting down conn relay")
                         return
                     }
-                    log.Debug("conn relay ends")
+                    clog.Debug("conn relay ends")
                 }(inbound)
             }
         }(source)
@@ -97,18 +97,18 @@ func (p *Proxy) relayPacketLoop() {
                 if err != nil {
                     select {
                     case <-p.ctx.Done():
-                        log.Debug("exiting")
+                        clog.Debug("exiting")
                         return
                     default:
                     }
-                    log.Error(common.NewError("failed to accept packet").Base(err))
+                    clog.Error(common.NewError("failed to accept packet").Base(err).Error())
                     continue
                 }
                 go func(inbound tunnel.PacketConn) {
                     defer inbound.Close()
                     outbound, err := p.sink.DialPacket(nil)
                     if err != nil {
-                        log.Error(common.NewError("proxy failed to dial packet").Base(err))
+                        clog.Error(common.NewError("proxy failed to dial packet").Base(err).Error())
                         return
                     }
                     defer outbound.Close()
@@ -137,12 +137,12 @@ func (p *Proxy) relayPacketLoop() {
                     select {
                     case err = <-errChan:
                         if err != nil {
-                            log.Error(err)
+                            clog.Error(err.Error())
                         }
                     case <-p.ctx.Done():
-                        log.Debug("shutting down packet relay")
+                        clog.Debug("shutting down packet relay")
                     }
-                    log.Debug("packet relay ends")
+                    clog.Debug("packet relay ends")
                 }(inbound)
             }
         }(source)
@@ -186,13 +186,20 @@ func NewProxyFromConfigData(data []byte, isJSON bool) (*Proxy, error) {
     if !ok {
         return nil, common.NewError("unknown proxy type: " + cfg.RunType)
     }
-    log.SetLogLevel(log.LogLevel(cfg.LogLevel))
-    if cfg.LogFile != "" {
-        file, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-        if err != nil {
-            return nil, common.NewError("failed to open log file").Base(err)
-        }
-        log.SetOutput(file)
+
+    err = clog.NewFile(100, 
+        clog.FileConfig{
+            Level:              clog.Level(cfg.LogLevel),
+            Filename:           cfg.LogFile,  
+            FileRotationConfig: clog.FileRotationConfig {
+                Rotate: true,
+                Daily:  true,
+            },
+        },
+    )
+    if err != nil {
+        return nil, common.NewError("unable to create new logger: ").Base(err)
     }
+
     return create(ctx)
 }
