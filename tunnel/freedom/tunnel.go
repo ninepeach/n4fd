@@ -1,9 +1,9 @@
 package freedom
 
 import (
-	"context"
+    "context"
 
-	"github.com/ninepeach/n4fd/tunnel"
+    "github.com/ninepeach/n4fd/tunnel"
 )
 
 const Name = "FREEDOM"
@@ -11,17 +11,17 @@ const Name = "FREEDOM"
 type Tunnel struct{}
 
 func (*Tunnel) Name() string {
-	return Name
+    return Name
 }
 
 func (*Tunnel) NewClient(ctx context.Context, client tunnel.Client) (tunnel.Client, error) {
-	return NewClient(ctx, client)
+    return NewClient(ctx, client)
 }
 
 func (*Tunnel) NewServer(ctx context.Context, client tunnel.Server) (tunnel.Server, error) {
-	panic("not supported")
+    panic("not supported")
 }
 
 func init() {
-	tunnel.RegisterTunnel(Name, &Tunnel{})
+    tunnel.RegisterTunnel(Name, &Tunnel{})
 }
