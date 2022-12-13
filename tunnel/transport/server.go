@@ -2,7 +2,9 @@ package transport
 
 import (
     "context"
+    "bufio"
     "net"
+    "net/http"
     "sync"
     "time"
 
@@ -45,7 +47,28 @@ func (s *Server) acceptLoop() {
             log.Info("tcp connection from %s", tcpConn.RemoteAddr())
             s.httpLock.RLock()
             if s.nextHTTP { // plaintext mode enabled
+                s.httpLock.RUnlock()
+                // we use real http header parser to mimic a real http server
+                rewindConn := common.NewRewindConn(tcpConn)
+                rewindConn.SetBufferSize(512)
+                defer rewindConn.StopBuffering()
 
+                r := bufio.NewReader(rewindConn)
+                httpReq, err := http.ReadRequest(r)
+                rewindConn.Rewind()
+                rewindConn.StopBuffering()
+                if err != nil {
+                    // this is not a http request, pass it to trojan protocol layer for further inspection
+                    s.connChan <- &Conn{
+                        Conn: rewindConn,
+                    }
+                } else {
+                    // this is a http request, pass it to websocket protocol layer
+                    log.Debug("plaintext http request: %v", httpReq)
+                    s.wsChan <- &Conn{
+                        Conn: rewindConn,
+                    }
+                }
             } else {
                 s.httpLock.RUnlock()
                 s.connChan <- &Conn{
