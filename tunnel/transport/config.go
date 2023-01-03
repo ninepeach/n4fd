@@ -16,10 +16,8 @@ type Config struct {
 type TransportPluginConfig struct {
 	Enabled bool     `json:"enabled" yaml:"enabled"`
 	Type    string   `json:"type" yaml:"type"`
-	Command string   `json:"command" yaml:"command"`
 	Option  string   `json:"option" yaml:"option"`
 	Arg     []string `json:"arg" yaml:"arg"`
-	Env     []string `json:"env" yaml:"env"`
 }
 
 type TCPConfig struct {

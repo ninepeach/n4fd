@@ -1,0 +1,9 @@
+run-type: server 
+local-addr: 0.0.0.0 
+local-port: 1080
+remote-addr: www.lanzou.com.lanzoujj.xyz 
+remote-port: 12023
+shadowsocks:
+  enabled: true
+  method: AES-128-GCM
+  password: haMLMXirByn6rGVh 

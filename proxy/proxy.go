@@ -29,7 +29,7 @@ type Proxy struct {
 
 func (p *Proxy) Run() error {
     p.relayConnLoop()
-    p.relayPacketLoop()
+    //p.relayPacketLoop()
     <-p.ctx.Done()
     return nil
 }
@@ -166,21 +166,16 @@ func RegisterProxyCreator(name string, creator Creator) {
     creators[name] = creator
 }
 
-func NewProxyFromConfigData(data []byte, isJSON bool) (*Proxy, error) {
+func NewProxyFromConfigData(data []byte) (*Proxy, error) {
     // create a unique context for each proxy instance to avoid duplicated authenticator
     ctx := context.WithValue(context.Background(), Name+"_ID", rand.Int())
     var err error
-    if isJSON {
-        ctx, err = config.WithJSONConfig(ctx, data)
-        if err != nil {
-            return nil, err
-        }
-    } else {
-        ctx, err = config.WithYAMLConfig(ctx, data)
-        if err != nil {
-            return nil, err
-        }
+
+    ctx, err = config.WithYAMLConfig(ctx, data)
+    if err != nil {
+        return nil, err
     }
+
     cfg := config.FromContext(ctx, Name).(*Config)
     create, ok := creators[strings.ToUpper(cfg.RunType)]
     if !ok {

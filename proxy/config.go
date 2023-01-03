@@ -11,7 +11,9 @@ type Config struct {
 func init() {
 	config.RegisterConfigCreator(Name, func() interface{} {
 		return &Config{
+			RunType: "server",
 			LogLevel: 1,
+			LogFile: "n4fd.log",
 		}
 	})
 }

@@ -21,4 +21,5 @@ require (
 	github.com/txthinking/x v0.0.0-20210326105829-476fab902fbe // indirect
 	golang.org/x/crypto v0.3.0 // indirect
 	golang.org/x/sys v0.2.0 // indirect
+	google.golang.org/protobuf v1.28.1 // indirect
 )

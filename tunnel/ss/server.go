@@ -1,6 +1,7 @@
 package ss
 
 import (
+    "fmt"
     "context"
     "net"
 
@@ -63,21 +64,17 @@ func (s *Server) Close() error {
 
 func NewServer(ctx context.Context, underlay tunnel.Server) (*Server, error) {
     cfg := config.FromContext(ctx, Name).(*Config)
+    // czw debug
+    fmt.Println(cfg)
     cipher, err := core.PickCipher(cfg.Shadowsocks.Method, nil, cfg.Shadowsocks.Password)
     if err != nil {
         return nil, common.NewError("invalid shadowsocks cipher").Base(err)
-    }
-    if cfg.RemoteHost == "" {
-        return nil, common.NewError("invalid shadowsocks redirection address")
-    }
-    if cfg.RemotePort == 0 {
-        return nil, common.NewError("invalid shadowsocks redirection port")
     }
     log.Trace("shadowsocks server created")
     return &Server{
         underlay:   underlay,
         Cipher:     cipher,
         Redirector: redirector.NewRedirector(ctx),
-        redirAddr:  tunnel.NewAddressFromHostPort("tcp", cfg.RemoteHost, cfg.RemotePort),
+        redirAddr:  tunnel.NewAddressFromHostPort("tcp", "8.8.8.8", 88),
     }, nil
 }

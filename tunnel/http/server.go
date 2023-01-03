@@ -73,6 +73,7 @@ type Server struct {
 func (s *Server) acceptLoop() {
     for {
         conn, err := s.underlay.AcceptConn(&Tunnel{})
+        log.Debug("accept conn")
 
         if err != nil {
             select {
