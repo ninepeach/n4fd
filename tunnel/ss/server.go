@@ -67,6 +67,7 @@ func NewServer(ctx context.Context, underlay tunnel.Server) (*Server, error) {
     // czw debug
     fmt.Println(cfg)
     cipher, err := core.PickCipher(cfg.Shadowsocks.Method, nil, cfg.Shadowsocks.Password)
+    log.Debug("m %s p %s", cfg.Shadowsocks.Method, cfg.Shadowsocks.Password)
     if err != nil {
         return nil, common.NewError("invalid shadowsocks cipher").Base(err)
     }
@@ -75,6 +76,5 @@ func NewServer(ctx context.Context, underlay tunnel.Server) (*Server, error) {
         underlay:   underlay,
         Cipher:     cipher,
         Redirector: redirector.NewRedirector(ctx),
-        redirAddr:  tunnel.NewAddressFromHostPort("tcp", "8.8.8.8", 88),
     }, nil
 }

@@ -16,8 +16,9 @@ func (c *Client) DialConn(address *tunnel.Address, tunnel tunnel.Tunnel) (tunnel
     if err != nil {
         return nil, err
     }
-    return &Conn{
+    return &obfsHTTPConn{
         Conn:     conn,
+        isServer: true,
     }, nil
 }
 

@@ -14,7 +14,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
-    fmt.Println("fucking cao %v", p)
+    fmt.Println("fucking cao", p)
     c.Conn.Write(p)
     return c.Conn.Write(p)
 }

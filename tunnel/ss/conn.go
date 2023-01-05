@@ -2,6 +2,7 @@ package ss
 
 import (
     "net"
+    "fmt"
 
     "github.com/ninepeach/n4fd/tunnel"
 )
@@ -12,10 +13,12 @@ type Conn struct {
 }
 
 func (c *Conn) Read(p []byte) (n int, err error) {
+    fmt.Println("fucking ss read")
     return c.aeadConn.Read(p)
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
+    fmt.Println("fucking ss write")
     return c.aeadConn.Write(p)
 }
 
