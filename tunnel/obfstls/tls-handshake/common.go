@@ -4,10 +4,6 @@ import (
 	"errors"
 )
 
-const ()
-
-const ()
-
 const (
 	recordHeaderLen    = 5
 	handshakeHeaderLen = 4
