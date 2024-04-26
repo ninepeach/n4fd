@@ -4,10 +4,21 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 type ExtensionType uint16
 
+// String method for a TLS Extension
+// See: http://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
+func (t ExtensionType) String() string {
+	if name, ok := ExtensionReg[t]; ok {
+		return name
+	}
+	return fmt.Sprintf("%#v (unknown)", t)
+}
+
+// TLS Extensions http://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
 const (
 	ExtServerName           ExtensionType = 0x00
 	ExtSupportedGroups      ExtensionType = 0x0a
@@ -16,10 +27,21 @@ const (
 	ExtEncryptThenMac       ExtensionType = 0x16
 	ExtExtendedMasterSecret ExtensionType = 0x17
 	ExtSessionTicket        ExtensionType = 0x23
-	ExtSupportVersions      ExtensionType = 0x2b
-	ExtKeyShareType         ExtensionType = 0x33
+	ExtKeyShare             ExtensionType = 0x33
 	ExtRenegotiationInfo    ExtensionType = 0xff01
 )
+
+var ExtensionReg = map[ExtensionType]string{
+	ExtServerName:           "server_name",
+	ExtSupportedGroups:      "supported_groups",
+	ExtECPointFormats:       "ec_point_formats",
+	ExtSignatureAlgorithms:  "signature_algorithms_cert",
+	ExtEncryptThenMac:       "encrypt_then_mac",
+	ExtExtendedMasterSecret: "extended_master_secret",
+	ExtSessionTicket:        "SessionTicket TLS",
+	ExtKeyShare:             "key_share",
+	ExtRenegotiationInfo:    "renegotiation_info",
+}
 
 var (
 	ErrShortBuffer  = errors.New("short buffer")
@@ -49,10 +71,10 @@ func NewExtension(t ExtensionType, data []byte) (ext Extension, err error) {
 		ext = new(ExtendedMasterSecretExtension)
 	case ExtSessionTicket:
 		ext = new(SessionTicketExtension)
+	case ExtKeyShare:
+		ext = new(KeyShareExtension)
 	case ExtRenegotiationInfo:
 		ext = new(RenegotiationInfoExtension)
-	case ExtKeyShareType:
-		ext = new(KeyShareExtension)
 	default:
 		return nil, ErrUnknownExt
 	}
@@ -109,24 +131,6 @@ func (ext *ServerNameExtension) Decode(b []byte) error {
 		return ErrShortBuffer
 	}
 	ext.Name = string(b[5 : 5+n])
-	return nil
-}
-
-type SessionTicketExtension struct {
-	Data []byte
-}
-
-func (ext *SessionTicketExtension) Type() ExtensionType {
-	return ExtSessionTicket
-}
-
-func (ext *SessionTicketExtension) Encode() ([]byte, error) {
-	return ext.Data, nil
-}
-
-func (ext *SessionTicketExtension) Decode(b []byte) error {
-	ext.Data = make([]byte, len(b))
-	copy(ext.Data, b)
 	return nil
 }
 
@@ -262,6 +266,54 @@ func (ext *ExtendedMasterSecretExtension) Decode(b []byte) error {
 	return nil
 }
 
+type SessionTicketExtension struct {
+	Data []byte
+}
+
+func (ext *SessionTicketExtension) Type() ExtensionType {
+	return ExtSessionTicket
+}
+
+func (ext *SessionTicketExtension) Encode() ([]byte, error) {
+	return ext.Data, nil
+}
+
+func (ext *SessionTicketExtension) Decode(b []byte) error {
+	ext.Data = make([]byte, len(b))
+	copy(ext.Data, b)
+	return nil
+}
+
+type KeyShareExtension struct {
+	Data []byte
+}
+
+func (ext *KeyShareExtension) Type() ExtensionType {
+	return ExtKeyShare
+}
+
+func (ext *KeyShareExtension) Encode() ([]byte, error) {
+	buf := &bytes.Buffer{}
+	buf.WriteByte(uint8(len(ext.Data)))
+	buf.Write(ext.Data)
+	return buf.Bytes(), nil
+}
+
+func (ext *KeyShareExtension) Decode(b []byte) error {
+	if len(b) < 1 {
+		return ErrShortBuffer
+	}
+
+	n := int(b[0])
+	if len(b[1:]) < n {
+		return ErrShortBuffer
+	}
+	ext.Data = make([]byte, n)
+	copy(ext.Data, b[1:])
+
+	return nil
+}
+
 type RenegotiationInfoExtension struct {
 	Data []byte
 }
@@ -278,36 +330,6 @@ func (ext *RenegotiationInfoExtension) Encode() ([]byte, error) {
 }
 
 func (ext *RenegotiationInfoExtension) Decode(b []byte) error {
-	if len(b) < 1 {
-		return ErrShortBuffer
-	}
-
-	n := int(b[0])
-	if len(b[1:]) < n {
-		return ErrShortBuffer
-	}
-	ext.Data = make([]byte, n)
-	copy(ext.Data, b[1:])
-
-	return nil
-}
-
-type KeyShareExtension struct {
-	Data []byte
-}
-
-func (ext *KeyShareExtension) Type() ExtensionType {
-	return ExtRenegotiationInfo
-}
-
-func (ext *KeyShareExtension) Encode() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	buf.WriteByte(uint8(len(ext.Data)))
-	buf.Write(ext.Data)
-	return buf.Bytes(), nil
-}
-
-func (ext *KeyShareExtension) Decode(b []byte) error {
 	if len(b) < 1 {
 		return ErrShortBuffer
 	}

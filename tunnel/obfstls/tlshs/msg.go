@@ -15,26 +15,25 @@ const (
 )
 
 type Random struct {
-	Time uint32
-	Data [28]byte
+	Time   uint32
+	Opaque [28]byte
 }
 
 type ClientHelloMsg struct {
-	Type               uint8
-	Length             uint16
-	TLSVersion         uint16
+	MsgType            uint8
+	MsgLen             uint16
+	TLSVersion         Version
 	Random             Random
 	SessionIDLen       uint8
 	SessionID          []byte
 	CipherSuiteLen     uint16
-	CipherSuite        []uint16
-	CompressionMethods []byte
-	ExtensionsLen      uint16
-	ExtensionData      []byte
+	CipherSuites       []uint16
+	CompressionMethods []uint8
 	Extensions         []Extension
 }
 
 func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
+	//check buf size > HandshakeHeaderSize
 	if len(buf) < int(HandshakeHeaderSize) {
 		// must be able to, at least, read the HandshakeHeader
 		return nil, errors.New("unsupported handshake message size")
@@ -43,15 +42,16 @@ func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
 	hm = &ClientHelloMsg{}
 
 	// Handshake Header:
-	hm.Type = uint8(buf[0])
-	if hm.Type != ClientHelloMsgType {
+	hm.MsgType = uint8(buf[0])
+	if hm.MsgType != ClientHelloMsgType {
 		return nil, errors.New("not a client hello handshake message")
 	}
-	hm.Length = uint16(buf[1])<<16 + uint16(buf[2])<<8 + uint16(buf[3])
+	hm.MsgLen = uint16(buf[1])<<16 + uint16(buf[2])<<8 + uint16(buf[3])
 
 	//buf index
 	bi := int(HandshakeHeaderSize)
-	if hm.Length > uint16(len(buf[bi:])) {
+	//check buf size > msg size
+	if hm.MsgLen > uint16(len(buf[bi:])) {
 		return nil, errors.New("client hello message has invalid length")
 	}
 
@@ -59,17 +59,17 @@ func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
 	if len(buf[bi:]) < 2 {
 		return nil, errors.New("client hello message has invalid format tls")
 	}
-	hm.TLSVersion = binary.BigEndian.Uint16(buf[bi : bi+2])
+	hm.TLSVersion = (Version(buf[bi]) << 8) + Version(buf[bi+1])
 	bi += 2
 
 	// Random Time
 	if len(buf[bi:]) < 32 {
-		return nil, errors.New("server hello message has invalid format random")
+		return nil, errors.New("client hello message has invalid format random")
 	}
 	hm.Random.Time = binary.BigEndian.Uint32(buf[bi : bi+4])
 	bi += 4
 	// Random Data
-	bi += copy(hm.Random.Data[:], buf[bi:bi+28])
+	bi += copy(hm.Random.Opaque[:], buf[bi:bi+28])
 
 	// SessionID:
 	if len(buf[bi:]) < 1 {
@@ -83,7 +83,7 @@ func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
 	hm.SessionID = make([]byte, hm.SessionIDLen)
 	bi += copy(hm.SessionID[:], buf[bi:bi+int(hm.SessionIDLen)])
 
-	// CipherSuite:
+	// CipherSuites:
 	if len(buf[bi:]) < 2 {
 		return nil, errors.New("client hello message has invalid format cipher suite")
 	}
@@ -93,7 +93,7 @@ func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
 	if len(buf[bi:]) < int(hm.CipherSuiteLen) {
 		return nil, errors.New("client hello message has invalid cipher suite length")
 	}
-	hm.CipherSuite, err = ParseCipherSuites(buf[bi : bi+(int(hm.CipherSuiteLen))])
+	hm.CipherSuites, err = ParseCipherSuites(buf[bi : bi+(int(hm.CipherSuiteLen))])
 	if err != nil {
 		return nil, err
 	}
@@ -115,26 +115,26 @@ func ParseClientHelloMsg(buf []byte) (hm *ClientHelloMsg, err error) {
 	if len(buf[bi:]) < 2 {
 		return nil, errors.New("client hello message has invalid format Extensions")
 	}
-	hm.ExtensionsLen = (uint16(buf[bi]) << 8) + uint16(buf[bi+1])
+	extsLen := (uint16(buf[bi]) << 8) + uint16(buf[bi+1])
 	bi += 2
 
-	if len(buf[bi:]) < int(hm.ExtensionsLen) {
+	if len(buf[bi:]) < int(extsLen) {
 		return nil, errors.New("client hello message has invalid format ExtensionsData")
 	}
-	hm.ExtensionData = make([]byte, hm.ExtensionsLen)
-	bi += copy(hm.ExtensionData[:], buf[bi:bi+int(hm.ExtensionsLen)])
+	ExtensionData := make([]byte, extsLen)
+	bi += copy(ExtensionData[:], buf[bi:bi+int(extsLen)])
 
-	hm.Extensions, _ = ParseExtensions(hm.ExtensionData, int(hm.ExtensionsLen))
+	hm.Extensions, _ = ParseExtensions(ExtensionData, int(extsLen))
 
 	return hm, nil
 }
 
 func (hm *ClientHelloMsg) ToBinary() []byte {
 	// pre-allocate if length is known, else cap is HandshakeHeaderSize
-	raw := make([]byte, 0, uint(hm.Length)+uint(HandshakeHeaderSize))
+	raw := make([]byte, 0, uint(hm.MsgLen)+uint(HandshakeHeaderSize))
 
-	raw = append(raw, byte(hm.Type))
-	raw = append(raw, byte(hm.Length>>16), byte(hm.Length>>8), byte(hm.Length))
+	raw = append(raw, byte(hm.MsgType))
+	raw = append(raw, byte(hm.MsgLen>>16), byte(hm.MsgLen>>8), byte(hm.MsgLen))
 	raw = append(raw, byte(hm.TLSVersion))
 
 	randomTime := [4]byte{}
@@ -144,42 +144,51 @@ func (hm *ClientHelloMsg) ToBinary() []byte {
 	randomTime[3] = byte(hm.Random.Time << 24 >> 24)
 
 	raw = append(raw, randomTime[:]...)
-	raw = append(raw, hm.Random.Data[:28]...)
+	raw = append(raw, hm.Random.Opaque[:28]...)
 
 	raw = append(raw, hm.SessionIDLen)
 	raw = append(raw, hm.SessionID[:]...)
 	raw = append(raw, byte(hm.CipherSuiteLen>>8), byte(hm.CipherSuiteLen))
-	for i := 0; i < len(hm.CipherSuite); i++ {
-		cs := hm.CipherSuite[i]
+	for i := 0; i < len(hm.CipherSuites); i++ {
+		cs := hm.CipherSuites[i]
 		raw = append(raw, byte(cs>>8), byte(cs))
 	}
 	raw = append(raw, hm.CompressionMethods[:]...)
-	raw = append(raw, byte(hm.ExtensionsLen>>8), byte(hm.ExtensionsLen))
-	raw = append(raw, hm.ExtensionData[:]...)
 
-	if hm.Length == 0 {
-		// Automatically figure out the length.
-		// Length was previously written as 0, now it's calculated and we need to update it.
-		hm.Length = uint16(len(raw)) - uint16(HandshakeHeaderSize)
-		raw[1] = byte(hm.Length >> 16)
-		raw[2] = byte(hm.Length >> 8)
-		raw[3] = byte(hm.Length)
+	//extensions to binary
+	extData := make([]byte, 0)
+	for _, ext := range hm.Extensions {
+		var b []byte
+		b, err := ext.Encode()
+		if err != nil {
+			break
+		}
+		extType := ext.Type()
+		extLen := len(b)
+		extData = append(extData, byte(extType>>8), byte(extType))
+		extData = append(extData, byte(extLen>>8), byte(extLen))
+		extData = append(extData, b[:]...)
 	}
+	raw = append(raw, byte(len(extData)>>8), byte(len(extData)))
+	raw = append(raw, extData[:]...)
+
+	hm.MsgLen = uint16(len(raw)) - uint16(HandshakeHeaderSize)
+	raw[1] = byte(hm.MsgLen >> 16)
+	raw[2] = byte(hm.MsgLen >> 8)
+	raw[3] = byte(hm.MsgLen)
 
 	return raw
 }
 
 type ServerHelloMsg struct {
-	Type              uint8
-	Length            uint16
-	TLSVersion        uint16
+	MsgType           uint8
+	MsgLen            uint16
+	TLSVersion        Version
 	Random            Random
 	SessionIDLen      uint8
 	SessionID         []byte
 	CipherSuite       uint16
 	CompressionMethod uint8
-	ExtensionsLen     uint16
-	ExtensionData     []byte
 	Extensions        []Extension
 }
 
@@ -192,19 +201,15 @@ func ParseServerHelloMsg(buf []byte) (hm *ServerHelloMsg, err error) {
 	hm = &ServerHelloMsg{}
 
 	// Handshake Header:
-	hm.Type = buf[0]
-	if hm.Type != ServerHelloMsgType {
+	hm.MsgType = buf[0]
+	if hm.MsgType != ServerHelloMsgType {
 		return nil, errors.New("not a server hello handshake message")
 	}
-	hm.Length = uint16(buf[1])<<16 + uint16(buf[2])<<8 + uint16(buf[3])
-
-	if hm.Length > uint16(len(buf[4:])) {
-		return nil, errors.New("server hello message has invalid length")
-	}
+	hm.MsgLen = uint16(buf[1])<<16 + uint16(buf[2])<<8 + uint16(buf[3])
 
 	//buf index
 	bi := int(HandshakeHeaderSize)
-	if hm.Length > uint16(len(buf[bi:])) {
+	if hm.MsgLen > uint16(len(buf[bi:])) {
 		return nil, errors.New("server hello message has invalid length")
 	}
 
@@ -212,7 +217,7 @@ func ParseServerHelloMsg(buf []byte) (hm *ServerHelloMsg, err error) {
 	if len(buf[bi:]) < 2 {
 		return nil, errors.New("server hello message has invalid format tls")
 	}
-	hm.TLSVersion = binary.BigEndian.Uint16(buf[bi : bi+2])
+	hm.TLSVersion = (Version(buf[bi]) << 8) + Version(buf[bi+1])
 	bi += 2
 
 	// Random Time
@@ -222,7 +227,7 @@ func ParseServerHelloMsg(buf []byte) (hm *ServerHelloMsg, err error) {
 	hm.Random.Time = binary.BigEndian.Uint32(buf[bi : bi+4])
 	bi += 4
 	// Random Data
-	bi += copy(hm.Random.Data[:], buf[bi:bi+28])
+	bi += copy(hm.Random.Opaque[:], buf[bi:bi+28])
 
 	// SessionID:
 	if len(buf[bi:]) < 1 {
@@ -255,27 +260,27 @@ func ParseServerHelloMsg(buf []byte) (hm *ServerHelloMsg, err error) {
 	if len(buf[bi:]) < 2 {
 		return nil, errors.New("server hello message has invalid format Extensions")
 	}
-	hm.ExtensionsLen = (uint16(buf[bi]) << 8) + uint16(buf[bi+1])
+	extsLen := (uint16(buf[bi]) << 8) + uint16(buf[bi+1])
 	bi += 2
 
-	if len(buf[bi:]) < int(hm.ExtensionsLen) {
+	if len(buf[bi:]) < int(extsLen) {
 		return nil, errors.New("server hello message has invalid format ExtensionsData")
 	}
-	hm.ExtensionData = make([]byte, hm.ExtensionsLen)
-	bi += copy(hm.ExtensionData[:], buf[bi:bi+int(hm.ExtensionsLen)])
+	ExtensionData := make([]byte, extsLen)
+	bi += copy(ExtensionData[:], buf[bi:bi+int(extsLen)])
 
-	hm.Extensions, _ = ParseExtensions(hm.ExtensionData, int(hm.ExtensionsLen))
+	hm.Extensions, _ = ParseExtensions(ExtensionData, int(extsLen))
 
 	return hm, nil
 }
 
 func (hm *ServerHelloMsg) ToBinary() []byte {
 	// Pre-allocate if length is known, else cap is HandshakeHeaderByteSize
-	raw := make([]byte, 0, hm.Length+uint16(HandshakeHeaderSize))
+	raw := make([]byte, 0, hm.MsgLen+uint16(HandshakeHeaderSize))
 
-	hm.Type = ServerHelloMsgType
-	raw = append(raw, byte(hm.Type))
-	raw = append(raw, byte(hm.Length>>16), byte(hm.Length>>8), byte(hm.Length))
+	hm.MsgType = ServerHelloMsgType
+	raw = append(raw, byte(hm.MsgType))
+	raw = append(raw, byte(hm.MsgLen>>16), byte(hm.MsgLen>>8), byte(hm.MsgLen))
 	raw = append(raw, byte(hm.TLSVersion>>8), byte(hm.TLSVersion))
 
 	randomTime := [4]byte{}
@@ -285,7 +290,7 @@ func (hm *ServerHelloMsg) ToBinary() []byte {
 	randomTime[3] = byte(hm.Random.Time << 24 >> 24)
 
 	raw = append(raw, randomTime[:]...)
-	raw = append(raw, hm.Random.Data[:28]...)
+	raw = append(raw, hm.Random.Opaque[:28]...)
 
 	hm.SessionIDLen = uint8(len(hm.SessionID))
 	raw = append(raw, byte(hm.SessionIDLen))
@@ -294,6 +299,7 @@ func (hm *ServerHelloMsg) ToBinary() []byte {
 	raw = append(raw, byte(hm.CipherSuite>>8), byte(hm.CipherSuite))
 	raw = append(raw, byte(hm.CompressionMethod))
 
+	//extensions to binary
 	extData := make([]byte, 0)
 	for _, ext := range hm.Extensions {
 		var b []byte
@@ -307,25 +313,13 @@ func (hm *ServerHelloMsg) ToBinary() []byte {
 		extData = append(extData, byte(extLen>>8), byte(extLen))
 		extData = append(extData, b[:]...)
 	}
+	raw = append(raw, byte(len(extData)>>8), byte(len(extData)))
+	raw = append(raw, extData[:]...)
 
-	hm.ExtensionsLen = uint16(len(extData))
-	hm.ExtensionData = extData
-	raw = append(raw, byte(hm.ExtensionsLen>>8), byte(hm.ExtensionsLen))
-	raw = append(raw, hm.ExtensionData[:]...)
-
-	if hm.Length == 0 {
-		// Automatically figure out the length.
-		// Length was previously written as 0, now it's calculated and we need to update it.
-		hm.Length = uint16(len(raw)) - uint16(HandshakeHeaderSize)
-		raw[1] = byte(hm.Length >> 16)
-		raw[2] = byte(hm.Length >> 8)
-		raw[3] = byte(hm.Length)
-	} else {
-		if hm.Length != uint16(len(raw))-uint16(HandshakeHeaderSize) {
-			hm.Length = uint16(len(raw)) - uint16(HandshakeHeaderSize)
-			raw = hm.ToBinary()
-		}
-	}
+	hm.MsgLen = uint16(len(raw)) - uint16(HandshakeHeaderSize)
+	raw[1] = byte(hm.MsgLen >> 16)
+	raw[2] = byte(hm.MsgLen >> 8)
+	raw[3] = byte(hm.MsgLen)
 
 	return raw
 }

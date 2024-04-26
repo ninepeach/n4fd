@@ -16,22 +16,13 @@ const (
 	HandshakeRecord    uint8 = 0x16
 	ApplicationRecord  uint8 = 0x17
 	SSL2Record         uint8 = 0x80
-
-	VersionTLS10 uint16 = 0x0301
-	VersionTLS11 uint16 = 0x0302
-	VersionTLS12 uint16 = 0x0303
-	VersionTLS13 uint16 = 0x0304
-)
-
-var (
-	ErrHandShake = errors.New("handshake failed")
 )
 
 type Record struct {
-	RecordType uint8
-	TLSVersion uint16
+	Type       uint8
+	TLSVersion Version
 	Length     uint16 // bytes in rest of the handshake message
-	Data       []byte
+	Opaque     []byte
 }
 
 func (record *Record) ReadFrom(r io.Reader) (n int64, err error) {
@@ -46,26 +37,30 @@ func (record *Record) ReadFrom(r io.Reader) (n int64, err error) {
 	//check record type
 	switch uint8(buf[0]) {
 	case HandshakeRecord:
-		record.RecordType = HandshakeRecord
+		record.Type = HandshakeRecord
 	case AlertRecord:
-		record.RecordType = AlertRecord
+		record.Type = AlertRecord
 	case ApplicationRecord:
-		record.RecordType = ApplicationRecord
+		record.Type = ApplicationRecord
+	case ChangeCipherRecord:
+		record.Type = ChangeCipherRecord
 	default:
 		return 0, errors.New("unsupported record type")
 	}
-	record.RecordType = buf[0]
-	record.TLSVersion = (uint16(buf[1]) << 8) + uint16(buf[2])
+
+	//set record type
+	record.Type = buf[0]
+	record.TLSVersion = (Version(buf[1]) << 8) + Version(buf[2])
 
 	//support TLS10 TLS11 TLS12 TLS13
-	if record.TLSVersion == uint16(VersionTLS13) {
-		record.TLSVersion = uint16(VersionTLS13)
-	} else if record.TLSVersion == uint16(VersionTLS12) {
-		record.TLSVersion = uint16(VersionTLS12)
-	} else if record.TLSVersion == uint16(VersionTLS11) {
-		record.TLSVersion = uint16(VersionTLS11)
-	} else if record.TLSVersion == uint16(VersionTLS10) {
-		record.TLSVersion = uint16(VersionTLS10)
+	if record.TLSVersion == Version(VersionTLS13) {
+		record.TLSVersion = Version(VersionTLS13)
+	} else if record.TLSVersion == Version(VersionTLS12) {
+		record.TLSVersion = Version(VersionTLS12)
+	} else if record.TLSVersion == Version(VersionTLS11) {
+		record.TLSVersion = Version(VersionTLS11)
+	} else if record.TLSVersion == Version(VersionTLS10) {
+		record.TLSVersion = Version(VersionTLS10)
 	} else {
 		return 0, errors.New("unsupported version of TLS")
 	}
@@ -75,8 +70,8 @@ func (record *Record) ReadFrom(r io.Reader) (n int64, err error) {
 		return 0, errors.New("record length exceeds the maximum for a record")
 	}
 
-	record.Data = make([]byte, record.Length)
-	nn, err = io.ReadFull(r, record.Data)
+	record.Opaque = make([]byte, record.Length)
+	nn, err = io.ReadFull(r, record.Opaque)
 
 	n += int64(nn)
 	return
@@ -93,8 +88,10 @@ func (record *Record) Size() int {
 }
 
 func (record *Record) HeaderToBinary() []byte {
+	record.Length = uint16(len(record.Opaque))
+
 	raw := make([]byte, RecordHeaderSize)
-	raw[0] = byte(record.RecordType)
+	raw[0] = byte(record.Type)
 	raw[1] = byte(record.TLSVersion >> 8)
 	raw[2] = byte(record.TLSVersion)
 	raw[3] = byte(record.Length >> 8)
@@ -106,6 +103,6 @@ func (record *Record) ToBinary() []byte {
 	headerBytes := record.HeaderToBinary()
 	raw := make([]byte, record.Size())
 	copy(raw[:], headerBytes[:])
-	copy(raw[RecordHeaderSize:], record.Data[:])
+	copy(raw[RecordHeaderSize:], record.Opaque[:])
 	return raw
 }
