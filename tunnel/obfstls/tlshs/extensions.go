@@ -4,36 +4,36 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"io"
 )
 
-const (
-	extensionHeaderLen = 4
-)
+type ExtensionType uint16
 
 const (
-	ExtServerName           uint16 = 0x00
-	ExtSupportedGroups      uint16 = 0x0a
-	ExtECPointFormats       uint16 = 0x0b
-	ExtSignatureAlgorithms  uint16 = 0x0d
-	ExtEncryptThenMac       uint16 = 0x16
-	ExtExtendedMasterSecret uint16 = 0x17
-	ExtSessionTicket        uint16 = 0x23
-	ExtRenegotiationInfo    uint16 = 0xff01
+	ExtServerName           ExtensionType = 0x00
+	ExtSupportedGroups      ExtensionType = 0x0a
+	ExtECPointFormats       ExtensionType = 0x0b
+	ExtSignatureAlgorithms  ExtensionType = 0x0d
+	ExtEncryptThenMac       ExtensionType = 0x16
+	ExtExtendedMasterSecret ExtensionType = 0x17
+	ExtSessionTicket        ExtensionType = 0x23
+	ExtSupportVersions      ExtensionType = 0x2b
+	ExtKeyShareType         ExtensionType = 0x33
+	ExtRenegotiationInfo    ExtensionType = 0xff01
 )
 
 var (
 	ErrShortBuffer  = errors.New("short buffer")
 	ErrTypeMismatch = errors.New("type mismatch")
+	ErrUnknownExt   = errors.New("unknown Extension")
 )
 
 type Extension interface {
-	Type() uint16
+	Type() ExtensionType
 	Encode() ([]byte, error)
 	Decode([]byte) error
 }
 
-func NewExtension(t uint16, data []byte) (ext Extension, err error) {
+func NewExtension(t ExtensionType, data []byte) (ext Extension, err error) {
 	switch t {
 	case ExtServerName:
 		ext = new(ServerNameExtension)
@@ -51,63 +51,33 @@ func NewExtension(t uint16, data []byte) (ext Extension, err error) {
 		ext = new(SessionTicketExtension)
 	case ExtRenegotiationInfo:
 		ext = new(RenegotiationInfoExtension)
+	case ExtKeyShareType:
+		ext = new(KeyShareExtension)
 	default:
-		ext = &unknownExtension{
-			types: t,
-		}
+		return nil, ErrUnknownExt
 	}
 	err = ext.Decode(data)
 	return
 }
 
-func ReadExtension(r io.Reader) (Extension, error) {
-	b := make([]byte, extensionHeaderLen)
-	if _, err := io.ReadFull(r, b); err != nil {
-		return nil, err
-	}
-	t := binary.BigEndian.Uint16(b[:2])
-	bb := make([]byte, int(binary.BigEndian.Uint16(b[2:4])))
-	if _, err := io.ReadFull(r, bb); err != nil {
-		return nil, err
-	}
+func ParseExtensions(buf []byte, bufLen int) (exts []Extension, err error) {
 
-	return NewExtension(t, bb)
-}
+	var bi int // buf index
+	exts = make([]Extension, 0)
+	for bi = 0; bi < bufLen; {
 
-func readExtensions(b []byte) (exts []Extension, err error) {
-	if len(b) == 0 {
-		return
-	}
+		extType := (ExtensionType(buf[bi]) << 8) + ExtensionType(buf[bi+1])
+		extLen := int((uint16(buf[bi+2]) << 8) + uint16(buf[bi+3]))
+		bi += 4
 
-	br := bytes.NewReader(b)
-	for br.Len() > 0 {
-		var ext Extension
-		ext, err = ReadExtension(br)
-		if err != nil {
-			return
+		ex, _ := NewExtension(extType, buf[bi:bi+extLen])
+		if ex != nil {
+			exts = append(exts, ex)
 		}
-		exts = append(exts, ext)
+		bi += extLen
+
 	}
-	return
-}
-
-type unknownExtension struct {
-	types uint16
-	raw   []byte
-}
-
-func (ext *unknownExtension) Type() uint16 {
-	return ext.types
-}
-
-func (ext *unknownExtension) Encode() ([]byte, error) {
-	return ext.raw, nil
-}
-
-func (ext *unknownExtension) Decode(b []byte) error {
-	ext.raw = make([]byte, len(b))
-	copy(ext.raw, b)
-	return nil
+	return exts, nil
 }
 
 type ServerNameExtension struct {
@@ -115,7 +85,7 @@ type ServerNameExtension struct {
 	Name     string
 }
 
-func (ext *ServerNameExtension) Type() uint16 {
+func (ext *ServerNameExtension) Type() ExtensionType {
 	return ExtServerName
 }
 
@@ -146,7 +116,7 @@ type SessionTicketExtension struct {
 	Data []byte
 }
 
-func (ext *SessionTicketExtension) Type() uint16 {
+func (ext *SessionTicketExtension) Type() ExtensionType {
 	return ExtSessionTicket
 }
 
@@ -164,7 +134,7 @@ type ECPointFormatsExtension struct {
 	Formats []uint8
 }
 
-func (ext *ECPointFormatsExtension) Type() uint16 {
+func (ext *ECPointFormatsExtension) Type() ExtensionType {
 	return ExtECPointFormats
 }
 
@@ -194,7 +164,7 @@ type SupportedGroupsExtension struct {
 	Groups []uint16
 }
 
-func (ext *SupportedGroupsExtension) Type() uint16 {
+func (ext *SupportedGroupsExtension) Type() ExtensionType {
 	return ExtSupportedGroups
 }
 
@@ -227,7 +197,7 @@ type SignatureAlgorithmsExtension struct {
 	Algorithms []uint16
 }
 
-func (ext *SignatureAlgorithmsExtension) Type() uint16 {
+func (ext *SignatureAlgorithmsExtension) Type() ExtensionType {
 	return ExtSignatureAlgorithms
 }
 
@@ -260,7 +230,7 @@ type EncryptThenMacExtension struct {
 	Data []byte
 }
 
-func (ext *EncryptThenMacExtension) Type() uint16 {
+func (ext *EncryptThenMacExtension) Type() ExtensionType {
 	return ExtEncryptThenMac
 }
 
@@ -278,7 +248,7 @@ type ExtendedMasterSecretExtension struct {
 	Data []byte
 }
 
-func (ext *ExtendedMasterSecretExtension) Type() uint16 {
+func (ext *ExtendedMasterSecretExtension) Type() ExtensionType {
 	return ExtExtendedMasterSecret
 }
 
@@ -296,7 +266,7 @@ type RenegotiationInfoExtension struct {
 	Data []byte
 }
 
-func (ext *RenegotiationInfoExtension) Type() uint16 {
+func (ext *RenegotiationInfoExtension) Type() ExtensionType {
 	return ExtRenegotiationInfo
 }
 
@@ -308,6 +278,36 @@ func (ext *RenegotiationInfoExtension) Encode() ([]byte, error) {
 }
 
 func (ext *RenegotiationInfoExtension) Decode(b []byte) error {
+	if len(b) < 1 {
+		return ErrShortBuffer
+	}
+
+	n := int(b[0])
+	if len(b[1:]) < n {
+		return ErrShortBuffer
+	}
+	ext.Data = make([]byte, n)
+	copy(ext.Data, b[1:])
+
+	return nil
+}
+
+type KeyShareExtension struct {
+	Data []byte
+}
+
+func (ext *KeyShareExtension) Type() ExtensionType {
+	return ExtRenegotiationInfo
+}
+
+func (ext *KeyShareExtension) Encode() ([]byte, error) {
+	buf := &bytes.Buffer{}
+	buf.WriteByte(uint8(len(ext.Data)))
+	buf.Write(ext.Data)
+	return buf.Bytes(), nil
+}
+
+func (ext *KeyShareExtension) Decode(b []byte) error {
 	if len(b) < 1 {
 		return ErrShortBuffer
 	}

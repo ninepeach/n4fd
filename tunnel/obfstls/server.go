@@ -41,6 +41,11 @@ func (s *Server) acceptLoop() {
 				handshaked: make(chan struct{}),
 			}
 
+			if err = newConn.Handshake(); err != nil {
+				conn.Close()
+				return
+			}
+
 			s.connChan <- &transport.Conn{
 				Conn: newConn,
 			}

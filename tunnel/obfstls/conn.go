@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"github.com/ninepeach/n4fd/log"
 	"github.com/ninepeach/n4fd/tunnel"
-	"github.com/ninepeach/n4fd/tunnel/obfstls/tls-handshake"
+	"github.com/ninepeach/n4fd/tunnel/obfstls/tlshs"
 	"math/rand"
 	"net"
 	"sync"
@@ -38,6 +38,7 @@ func (c *Conn) Handshake() (err error) {
 		return
 	}
 
+	//err = tlshs.HandshakeWithClient(c.Conn)
 	err = c.serverHandshake()
 	if err != nil {
 		return
@@ -53,15 +54,11 @@ func (c *Conn) serverHandshake() error {
 		log.Debug(err)
 		return err
 	}
-	if record.Type != tlshs.RecordTypeHandshake {
-		return tlshs.ErrBadRecordType
+	if record.RecordType != tlshs.HandshakeRecord {
+		return tlshs.ErrHandShake
 	}
 
-	clientMsg := &tlshs.ClientHelloMsg{}
-	if err := clientMsg.Decode(record.Opaque); err != nil {
-		log.Debug(err)
-		return err
-	}
+	clientMsg, _ := tlshs.ParseClientHelloMsg(record.Data)
 
 	for _, ext := range clientMsg.Extensions {
 		if ext.Type() == tlshs.ExtSessionTicket {
@@ -76,7 +73,7 @@ func (c *Conn) serverHandshake() error {
 	}
 
 	serverMsg := &tlshs.ServerHelloMsg{
-		Version:           tlshs.VersionTLS12,
+		TLSVersion:        tlshs.VersionTLS12,
 		SessionID:         clientMsg.SessionID,
 		CipherSuite:       0xcca8,
 		CompressionMethod: 0x00,
@@ -90,16 +87,14 @@ func (c *Conn) serverHandshake() error {
 	}
 
 	serverMsg.Random.Time = uint32(time.Now().Unix())
-	rand.Read(serverMsg.Random.Opaque[:])
-	b, err := serverMsg.Encode()
-	if err != nil {
-		return err
-	}
+	rand.Read(serverMsg.Random.Data[:])
+	b := serverMsg.ToBinary()
 
 	record = &tlshs.Record{
-		Type:    tlshs.RecordTypeHandshake,
-		Version: tlshs.VersionTLS10,
-		Opaque:  b,
+		RecordType: tlshs.HandshakeRecord,
+		TLSVersion: tlshs.VersionTLS10,
+		Length:     uint16(len(b)),
+		Data:       b,
 	}
 
 	if _, err := record.WriteTo(&c.wbuf); err != nil {
@@ -107,9 +102,10 @@ func (c *Conn) serverHandshake() error {
 	}
 
 	record = &tlshs.Record{
-		Type:    tlshs.RecordTypeChangeCipher,
-		Version: tlshs.VersionTLS12,
-		Opaque:  []byte{0x01},
+		RecordType: tlshs.ChangeCipherRecord,
+		TLSVersion: tlshs.VersionTLS12,
+		Length:     uint16(1),
+		Data:       []byte{0x01},
 	}
 	if _, err := record.WriteTo(&c.wbuf); err != nil {
 		return err
@@ -119,14 +115,6 @@ func (c *Conn) serverHandshake() error {
 
 func (c *Conn) Read(b []byte) (n int, err error) {
 
-	if err = c.Handshake(); err != nil {
-		return
-	}
-
-	select {
-	case <-c.handshaked:
-	}
-
 	if c.rbuf.Len() > 0 {
 		return c.rbuf.Read(b)
 	}
@@ -134,8 +122,8 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	if _, err = record.ReadFrom(c.Conn); err != nil {
 		return
 	}
-	n = copy(b, record.Opaque)
-	_, err = c.rbuf.Write(record.Opaque[n:])
+	n = copy(b, record.Data)
+	_, err = c.rbuf.Write(record.Data[n:])
 
 	return n, err
 }
@@ -152,13 +140,14 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 			b = b[:0]
 		}
 		record := &tlshs.Record{
-			Type:    tlshs.RecordTypeAppData,
-			Version: tlshs.VersionTLS12,
-			Opaque:  data,
+			RecordType: tlshs.ApplicationRecord,
+			TLSVersion: tlshs.VersionTLS12,
+			Length:     uint16(len(data)),
+			Data:       data,
 		}
 
 		if c.wbuf.Len() > 0 {
-			record.Type = tlshs.RecordTypeHandshake
+			record.RecordType = tlshs.HandshakeRecord
 			record.WriteTo(&c.wbuf)
 			_, err = c.wbuf.WriteTo(c.Conn)
 			return

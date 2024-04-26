@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -189,7 +188,6 @@ func NewProxyFromConfigData(data []byte) (*Proxy, error) {
 	cfg := config.FromContext(ctx, Name).(*Config)
 	create, ok := creators[strings.ToUpper(cfg.RunType)]
 
-	fmt.Println(creators, cfg)
 	if !ok {
 		return nil, common.NewError("unknown proxy type: " + cfg.RunType)
 	}
