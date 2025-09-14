@@ -2,145 +2,109 @@ package vless
 
 import (
 	"bufio"
-	"encoding/binary"
+	"context"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
+
+	"github.com/ninepeach/n4fd/internal/util/uuid"
 )
 
-// Handler performs minimal VLESS TCP processing:
-// - parse version(=0), UUID(16B), command, address, port
-// - whitelist UUID, then direct-dial target and splice.
 type Handler struct {
-	Allow     map[[16]byte]bool
-	Dialer    *net.Dialer
-	EnableLog bool
+	// 允许的 UUID 集（白名单）
+	Users map[uuid.UUID]struct{}
+
+	// 出站拨号（可被替换）；默认 direct
+	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+
+	// 日志开关
+	Debug bool
+}
+
+func NewHandler(uuids []uuid.UUID, debug bool) *Handler {
+	m := make(map[uuid.UUID]struct{}, len(uuids))
+	for _, u := range uuids {
+		m[u] = struct{}{}
+	}
+	return &Handler{
+		Users: m,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, address)
+		},
+		Debug: debug,
+	}
+}
+
+func (h *Handler) allow(u uuid.UUID) bool {
+	_, ok := h.Users[u]
+	return ok
 }
 
 func (h *Handler) HandleConn(c net.Conn) error {
 	defer c.Close()
+
 	br := bufio.NewReader(c)
 
-	// VLESS request basic parse (compat with common clients)
-	ver, err := br.ReadByte()
+	// 解析 VLESS 请求
+	req, err := ParseRequest(br, h.allow)
 	if err != nil {
-		return err
-	}
-	if ver != 0 {
-		return fmt.Errorf("VLESS: unsupported version %d", ver)
+		return fmt.Errorf("parse vless request: %w", err)
 	}
 
-	var uuid [16]byte
-	if _, err := io.ReadFull(br, uuid[:]); err != nil {
-		return err
-	}
-	if !h.Allow[uuid] {
-		return errors.New("VLESS: unauthorized UUID")
+	if h.Debug {
+		fmt.Printf("VLESS: user=%x cmd=%d dst=%s:%d flow=%s\n", req.UserID, req.Command, req.TargetAddr, req.TargetPort, req.Flow)
 	}
 
-	// optLen + opts (we skip)
-	optLen, err := br.ReadByte()
+	// 只支持 TCP
+	if req.Command != CmdTCP {
+		return errors.New("only TCP is supported in minimal server")
+	}
+
+	// 回写响应头
+	if err := WriteResponseHeader(c, req.Version); err != nil {
+		return fmt.Errorf("write vless response header: %w", err)
+	}
+
+	// 拨号到目标
+	dst := net.JoinHostPort(req.TargetAddr, fmt.Sprintf("%d", req.TargetPort))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rc, err := h.DialContext(ctx, "tcp", dst)
 	if err != nil {
-		return err
+		return fmt.Errorf("dial %s: %w", dst, err)
 	}
-	if optLen > 0 {
-		if _, err := io.CopyN(io.Discard, br, int64(optLen)); err != nil {
-			return err
-		}
-	}
+	defer rc.Close()
 
-	// command
-	cmd, err := br.ReadByte()
-	if err != nil {
-		return err
-	}
-	if cmd != 0x01 { // TCP connect only
-		return fmt.Errorf("VLESS: unsupported cmd %d", cmd)
-	}
-
-	// reserved 2 bytes
-	if _, err := io.CopyN(io.Discard, br, 2); err != nil {
-		return err
-	}
-
-	// address
-	atyp, err := br.ReadByte()
-	if err != nil {
-		return err
-	}
-	var host string
-	switch atyp {
-	case 0x01: // IPv4
-		ip := make([]byte, 4)
-		if _, err := io.ReadFull(br, ip); err != nil {
-			return err
-		}
-		host = net.IP(ip).String()
-	case 0x02: // domain
-		l, err := br.ReadByte()
-		if err != nil {
-			return err
-		}
-		b := make([]byte, int(l))
-		if _, err := io.ReadFull(br, b); err != nil {
-			return err
-		}
-		host = string(b)
-	case 0x04: // IPv6
-		ip := make([]byte, 16)
-		if _, err := io.ReadFull(br, ip); err != nil {
-			return err
-		}
-		host = net.IP(ip).String()
-	default:
-		return fmt.Errorf("VLESS: bad atyp %d", atyp)
-	}
-
-	// port
-	var pbuf [2]byte
-	if _, err := io.ReadFull(br, pbuf[:]); err != nil {
-		return err
-	}
-	port := binary.BigEndian.Uint16(pbuf[:])
-
-	if h.EnableLog {
-		log.Printf("VLESS req uuid=%x host=%s port=%d", uuid, host, port)
-	}
-
-	// Dial out
-	target, err := h.Dialer.Dial("tcp", net.JoinHostPort(host, fmt.Sprint(port)))
-	if err != nil {
-		return fmt.Errorf("dial %s:%d failed: %w", host, port, err)
-	}
-	defer target.Close()
-
-	// Splice: remaining buffered bytes first
-	if br.Buffered() > 0 {
-		if _, err := io.CopyN(target, br, int64(br.Buffered())); err != nil {
-			return err
-		}
-	}
-
-	// bidirectional copy
+	// 把 reader 中还残留的字节（如版本后续已经读取一部分）交给 rc
+	// 这里 br 里此时只剩 body；我们需要把 br 连续读 => rc，反之亦然
 	errc := make(chan error, 2)
+
 	go func() {
-		_, e := io.Copy(target, c)
-		_ = target.(*net.TCPConn).CloseWrite()
+		// client->remote
+		_, e := io.Copy(rc, br)
+		_ = rc.(*net.TCPConn).CloseWrite()
 		errc <- e
 	}()
 	go func() {
-		_, e := io.Copy(c, target)
+		// remote->client
+		_, e := io.Copy(c, rc)
 		_ = c.(*net.TCPConn).CloseWrite()
 		errc <- e
 	}()
 
-	select {
-	case <-time.After(24 * time.Hour):
+	// 等任一方向出错/结束
+	if h.Debug {
+		if e := <-errc; e != nil && !errors.Is(e, io.EOF) {
+			fmt.Println("pipe err:", e)
+		}
+		<-errc
 		return nil
-	case e := <-errc:
-		return e
 	}
+	<-errc
+	<-errc
+	return nil
 }
