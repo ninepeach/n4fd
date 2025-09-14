@@ -1,40 +1,19 @@
-GO         ?= go
-GOFMT      ?= $(GO)fmt
+BINARY := n4fd
 
-BIN_NAME   ?= n4fd
-BIN_DIR    ?= $(shell pwd)/build
-
-VERSION    ?= $(shell cat VERSION.txt)
-REVERSION  ?=$(shell git log -1 --pretty="%H")
-BRANCH     ?=$(shell git rev-parse --abbrev-ref HEAD)
-TIME       ?=$(shell date +%Y-%m-%dT%H:%M:%S%z)
-
-
-default: fmt style build
-
-fmt:
-	@echo ">> format code style"
-	$(GOFMT) -w $$(find . -path ./vendor -prune -o -name '*.go' -print) 
-
-style:
-	@echo ">> checking code style"
-	! $(GOFMT) -d $$(find . -path ./vendor -prune -o -name '*.go' -print) | grep '^'
+.PHONY: build run clean
 
 build:
-	@echo ">> building binaries"
-	$(GO) build -o build/$(BIN_NAME) -ldflags '-X "github.com/ninepeach/n4fd/constant.Version=$(VERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildRevision=$(REVERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildBranch=$(BRANCH)" -X "github.com/ninepeach/n4fd/constant.BuildTime=$(TIME)"'
+	go build -o $(BINARY) ./cmd/proxy
 
-darwin:
-	@echo ">> building binaries"
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -o build/$(BIN_NAME)-darwin -ldflags '-X "github.com/ninepeach/n4fd/constant.Version=$(VERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildRevision=$(REVERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildBranch=$(BRANCH)" -X "github.com/ninepeach/n4fd/constant.BuildTime=$(TIME)"'
-
-linux:
-	@echo ">> building binaries"
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -o build/$(BIN_NAME)-linux -ldflags '-X "github.com/ninepeach/n4fd/constant.Version=$(VERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildRevision=$(REVERSION)" -X  "github.com/ninepeach/n4fd/constant.BuildBranch=$(BRANCH)" -X "github.com/ninepeach/n4fd/constant.BuildTime=$(TIME)"'
-
-all:  fmt style darwin linux
+run: build
+	./$(BINARY) \
+	  -listen :8443 \
+	  -priv 'DBk2n9pzy8e2CwsXU0WrZ3Zobldz_467c2eI-Z0iXw0' \
+	  -dest 'update.microsoft.com:443' \
+	  -sni 'update.microsoft.com' \
+	  -short 'a1b2c3d4e5f67890' \
+	  -uuids 0d32d1f2-3453-429f-82cf-8cabcca1223e \
+	  -debug
 
 clean:
-	rm -rf $(BIN_DIR)
-
-.PHONY: all fmt style build darwin linux
+	rm -f $(BINARY)
