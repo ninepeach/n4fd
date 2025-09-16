@@ -2,96 +2,153 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"flag"
 	"log"
 	"net"
 	"strings"
+	"time"
 
-	"github.com/ninepeach/n4fd/internal/inbound/reality"
-	"github.com/ninepeach/n4fd/internal/util/uuid"
-	"github.com/ninepeach/n4fd/internal/vless"
+	realityin "github.com/ninepeach/n4fd/internal/inbound/reality"
+	vless "github.com/ninepeach/n4fd/internal/vless"
 )
 
-// 小适配器：让 vless.Handler 满足 reality.NextHandler
-type vlessNext struct{ h *vless.Handler }
-
-func (n vlessNext) HandleConn(c net.Conn) error { return n.h.HandleConn(c) }
-
-func parsePrivBase64URLMust(s string) []byte {
-	r := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(s), "-", "+"), "_", "/")
+func mustPrivBase64URL(s string) []byte {
+	// accept base64url or base64
+	r := strings.NewReplacer("-", "+", "_", "/").Replace(strings.TrimSpace(s))
 	for len(r)%4 != 0 {
 		r += "="
 	}
-	b, err := base64.StdEncoding.DecodeString(r)
+	key, err := base64.StdEncoding.DecodeString(r)
 	if err != nil {
-		log.Fatalf("decode priv: %v", err)
+		log.Fatalf("decode private key failed: %v", err)
 	}
-	if len(b) != 32 {
-		log.Fatalf("invalid priv len=%d, expect 32", len(b))
+	if len(key) != 32 {
+		log.Fatalf("invalid private key length: %d (expect 32)", len(key))
 	}
-	return b
+	return key
 }
 
-func mustParseUUIDs(csv string) []uuid.UUID {
-	if strings.TrimSpace(csv) == "" {
-		log.Fatal("missing -uuids")
-	}
-	parts := strings.Split(csv, ",")
-	out := make([]uuid.UUID, 0, len(parts))
-	for _, p := range parts {
-		u, err := uuid.Parse(strings.TrimSpace(p))
-		if err != nil {
-			log.Fatalf("bad uuid %q: %v", p, err)
+func parseShortMap(short string, debug bool) map[[8]byte]bool {
+	m := make(map[[8]byte]bool)
+	short = strings.TrimSpace(short)
+	if short == "" {
+		// allow empty short-id (many clients send empty by default)
+		var z [8]byte
+		m[z] = true
+		if debug {
+			log.Printf("DEBUG allow empty short-id")
 		}
-		out = append(out, u)
+		return m
 	}
-	return out
+	// accept one or multiple short-ids separated by comma
+	parts := strings.Split(short, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			var z [8]byte
+			m[z] = true
+			continue
+		}
+		if len(p) != 16 {
+			log.Fatalf("short-id must be 16 hex chars: %q", p)
+		}
+		raw, err := hex.DecodeString(p)
+		if err != nil {
+			log.Fatalf("short-id hex decode failed: %v", err)
+		}
+		var k [8]byte
+		copy(k[:], raw)
+		m[k] = true
+	}
+	return m
+}
+
+func parseUUIDList(uuids string) map[[16]byte]bool {
+	m := make(map[[16]byte]bool)
+	for _, u := range strings.Split(uuids, ",") {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		var raw [16]byte
+		b, err := hex.DecodeString(strings.ReplaceAll(strings.ReplaceAll(u, "-", ""), " ", ""))
+		if err != nil || len(b) != 16 {
+			log.Fatalf("invalid uuid: %s", u)
+		}
+		copy(raw[:], b)
+		m[raw] = true
+	}
+	return m
 }
 
 func main() {
 	var (
-		listen = flag.String("listen", ":8443", "REALITY listen addr")
-		priv   = flag.String("priv", "", "REALITY x25519 private key (base64url, 32B)")
-		dest   = flag.String("dest", "www.cloudflare.com:443", "fallback dest (TLS1.3 + h2)")
-		sniStr = flag.String("sni", "www.cloudflare.com", "allowed SNI list (comma-separated) or *")
-		short  = flag.String("short", "", "short-id hex (16 chars) — optional")
-		uuids  = flag.String("uuids", "", "VLESS UUIDs (comma-separated)")
-		debug  = flag.Bool("debug", true, "enable verbose logs")
+		listen  = flag.String("listen", ":8443", "TCP listen address")
+		privStr = flag.String("priv", "", "REALITY private key (base64url/base64, 32 bytes)")
+		dest    = flag.String("dest", "", "REALITY dial dest 'host:443' (recommend an IP:443 to avoid Fake-IP loops)")
+		sni     = flag.String("sni", "*", "allowed SNI list (comma). Use '*' to allow any")
+		short   = flag.String("short", "", "short-id (16 hex) or comma-separated multiple, empty allowed")
+		uuids   = flag.String("uuids", "", "allowed VLESS UUIDs (comma separated, hyphens ok)")
+		debug   = flag.Bool("debug", true, "enable debug logs")
 	)
 	flag.Parse()
-	_ = short // 占位，后续如需接入 short-id 校验再用
 
-	if *priv == "" {
+	if *privStr == "" {
 		log.Fatal("missing -priv")
 	}
-
-	// 1) VLESS 处理器（支持 Vision）
-	vh := vless.NewHandler(mustParseUUIDs(*uuids), *debug)
-
-	// 2) 直接构造 reality.Inbound（字段名与当前仓库保持一致；以下是最常见的一套）
-	inb := &reality.Inbound{
-		Listen:  *listen,
-		PrivKey: parsePrivBase64URLMust(*priv),
-		Dest:    *dest,
-		Debug:   *debug,
-		Next:    vlessNext{h: vh},
+	if *dest == "" {
+		log.Fatal("missing -dest (strongly recommend an IP:443)")
 	}
+	priv := mustPrivBase64URL(*privStr)
 
-	// SNI 白名单（若 reality.Inbound 暴露了 SNIAllow 字段就用；没有就忽略）
-	if *sniStr != "*" {
-		inb.SNIAllow = map[string]bool{}
-		for _, n := range strings.Split(*sniStr, ",") {
-			n = strings.TrimSpace(n)
-			if n != "" {
-				inb.SNIAllow[n] = true
+	var sniAllow map[string]bool
+	if strings.TrimSpace(*sni) != "*" {
+		sniAllow = map[string]bool{}
+		for _, name := range strings.Split(*sni, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				sniAllow[name] = true
 			}
 		}
+	} // nil => allow any
+
+	shortMap := parseShortMap(*short, *debug)
+	uuidAllow := parseUUIDList(*uuids)
+	if len(uuidAllow) == 0 {
+		log.Fatal("no UUIDs provided; set -uuids")
 	}
 
-	ln, err := net.Listen("tcp", inb.Listen)
-	if err != nil {
-		log.Fatalf("listen %s: %v", inb.Listen, err)
+	// Build VLESS handler with UUID whitelist
+	vh := &vless.Handler{
+		Allow:     uuidAllow,
+		Dialer:    &net.Dialer{Timeout: 15 * time.Second},
+		EnableLog: *debug,
 	}
-	log.Printf("Listening REALITY on %s  dest=%s", inb.Listen, inb.Dest)
-	log.Fatal(inb.Serve(ln))
+
+	// REALITY inbound
+	ri := &realityin.Inbound{
+		Listen:   *listen,
+		PrivKey:  priv,
+		Dest:     *dest,
+		SNIAllow: sniAllow,
+		ShortIDs: shortMap,
+		Debug:    *debug,
+		Next:     vh, // hand off to VLESS on success
+	}
+
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *listen, err)
+	}
+	log.Printf("INFO listening on %s (dest=%s sni=%v short-ids=%d)", *listen, *dest, func() any {
+		if sniAllow == nil {
+			return "*"
+		}
+		return sniAllow
+	}(), len(shortMap))
+
+	if err := ri.Serve(ln); err != nil {
+		log.Fatal(err)
+	}
 }
